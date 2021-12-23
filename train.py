@@ -1,12 +1,22 @@
-import numpy as np
+
 import pandas as pd
+import numpy as np
+
+random_seed = 1337
+from os import environ
+environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+# !! important !! import torch after setting cublas deterministic or it will not work !!
+import torch
+from transformers import TrainingArguments, Trainer, DistilBertTokenizer, DistilBertForSequenceClassification
+torch.use_deterministic_algorithms(True)
+torch.backends.cudnn.benchmark = False
+torch.manual_seed(random_seed)
+np.random.seed(random_seed)
+import random
+random.seed(random_seed)
+
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, recall_score, precision_score, f1_score
-import torch
-from transformers import TrainingArguments, Trainer
-from transformers import DistilBertTokenizer, DistilBertForSequenceClassification
-from transformers import EarlyStoppingCallback
-
 
 # Read data
 data = pd.read_json('data/dataset_1.json')
@@ -19,7 +29,6 @@ max_display_text_length = len(data.iloc[np.argmax(data['display_text'].to_numpy(
 # y = data.label.to_list()
 
 validation_split_ratio = 0.2
-random_seed = 1337
 
 # Define pretrained tokenizer and model
 model_name = "distilbert-base-uncased"
@@ -62,55 +71,48 @@ val_dataset = Dataset(X_val_tokenized, y_val)
 
 # ----- 2. Fine-tune pretrained model -----#
 # Define Trainer parameters
-def compute_metrics(p):
-    pred, labels = p
+def compute_metrics(pred, labels):
     pred = np.argmax(pred, axis=1)
-
     accuracy = accuracy_score(y_true=labels, y_pred=pred)
-    recall = recall_score(y_true=labels, y_pred=pred)
-    precision = precision_score(y_true=labels, y_pred=pred)
-    f1 = f1_score(y_true=labels, y_pred=pred)
+    recall = recall_score(y_true=labels, y_pred=pred, average='weighted')
+    precision = precision_score(y_true=labels, y_pred=pred, average='weighted')
+    f1 = f1_score(y_true=labels, y_pred=pred, average='weighted')
 
     return {"accuracy": accuracy, "precision": precision, "recall": recall, "f1": f1}
+
+# def compute_metrics_eval(p):
+#     pred, labels = p
+#     compute_metrics(pred, labels)
 
 # Define Trainer
 args = TrainingArguments(
     output_dir="output",
-    evaluation_strategy="steps",
-    eval_steps=500,
-    per_device_train_batch_size=16,
-    per_device_eval_batch_size=16,
-    num_train_epochs=1,
-    seed=0,
-    load_best_model_at_end=True,
+    evaluation_strategy="epoch",
+    eval_steps=1,
+    per_device_train_batch_size=100,
+    per_device_eval_batch_size=100,
+    num_train_epochs=3,
+    seed=random_seed,
+    load_best_model_at_end=False
 )
 trainer = Trainer(
     model=model,
     args=args,
     train_dataset=train_dataset,
     eval_dataset=val_dataset,
-    compute_metrics=compute_metrics,
-    callbacks=[EarlyStoppingCallback(early_stopping_patience=3)],
+    compute_metrics=lambda p: compute_metrics(p[0], p[1])
 )
 
 # Train pre-trained model
 trainer.train()
 
 # ----- 3. Predict -----#
-# Load test data
-# test_data = pd.read_csv("test.csv")
-# X_test = list(test_data["review"])
-X_test_tokenized = tokenizer(X_test, padding=True, truncation=True, max_length=512)
-
 # Create torch dataset
-test_dataset = Dataset(X_test_tokenized)
-
-# # Load trained model
-# model_path = "./output/checkpoint-50000"
-# model = BertForSequenceClassification.from_pretrained(model_path, num_labels=2)
-
-# Make prediction
+test_dataset = Dataset(tokenizer(X_test, padding=True, truncation=True, max_length=512))
+#     # Make prediction
 raw_pred, _, _ = trainer.predict(test_dataset)
 
 # Preprocess raw predictions
-y_pred = np.argmax(raw_pred, axis=1)
+# y_pred = np.argmax(raw_pred, axis=1)
+m = compute_metrics(raw_pred, y_test)
+print(m)
