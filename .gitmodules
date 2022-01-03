@@ -1,0 +1,3 @@
+[submodule "distilbert-base-uncased"]
+	path = distilbert-base-uncased
+	url = https://huggingface.co/distilbert-base-uncased
