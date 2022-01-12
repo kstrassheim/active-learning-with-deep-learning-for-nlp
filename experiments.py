@@ -171,7 +171,7 @@ def train_model(X_train, y_train, X_val, y_val, X_test, y_test, random_state, ba
 
     # Test
     metrics = trainer.evaluate(test_dataset, metric_key_prefix="")
-
+    torch.cuda.empty_cache()
 #     raw_pred, _, _ = trainer.predict(test_dataset)
 #     m = compute_metrics(raw_pred, y_test)
     return metrics, trainer, trainer.model, tokenizer
@@ -185,6 +185,9 @@ class bertopic_clustering:
         from bertopic import BERTopic
         self.__topic_model = BERTopic(embedding_model="all-mpnet-base-v2")
         self.__topic_model.fit(X)
+
+    def __del__(self):
+        del self.__topic_model
 
     def run(self, input, random_state, verbose=False):
         self.result = None
@@ -232,7 +235,11 @@ class sbert_kmeans:
         model.max_seq_length = np.argmax(X)
         encoded_sentences = model.encode(X, show_progress_bar=False)
         self._encoded_sentences_dict = {X[i]:encoded_sentences[i] for i in range(len(encoded_sentences))}
-    
+        del model
+        torch.cuda.empty_cache()
+    def __del__(self):
+        del self._encoded_sentences_dict
+
     def run(self, input, random_state, verbose=False):
         l = len(input)
         if l <= 0: return []
@@ -252,7 +259,8 @@ class sbert_kmeans:
             model = SentenceTransformer(self.__bert_model_name)
             model.max_seq_length = np.argmax(input)
             embedding_list = model.encode(input, show_progress_bar=verbose)
-        
+            del model
+            torch.cuda.empty_cache()
         from sklearn.cluster import KMeans
         
         clustering_model = KMeans(n_clusters=self.__sample_size, random_state=random_state) 
@@ -331,41 +339,72 @@ def apply_active_learning(algorithm, source, source_y, sample_size, random_state
         metric["duration_total"] = duration_total
         res.append(metric)
         i = i + 1
+    del model
     return pd.DataFrame(res)
+
+def flatten_experiments_results(experiments_result):
+    arr = []
+    for algorithm_id in experiments_result:
+        if (algorithm_id in ['duration']): continue
+        for rid in range(len(experiments_result[algorithm_id])):
+            er = experiments_result[algorithm_id][rid]
+            for foldid in range(len(er)):
+                ef = er[foldid]
+                for il in range(len(ef["trained_samples"])):
+                    o = { 'algorithm': algorithm_id, 'random_id':rid, 'fold_id':foldid}
+                    for efi in ef:
+                        o[efi] = ef[efi][il]
+                    o['group_id'] = f'{o["algorithm"]}_{o["trained_samples"]}'
+                    arr.append(o)  
+                # print(avg_fold)
+    return arr
+def group_flattened_experiment_results(results):
+    df = pd.DataFrame(flatten_experiments_results(ex))
+    grp = df.groupby(['algorithm','trained_samples']).agg(['mean', 'median', 'var']).reset_index()
+    grp.columns = [first if second == '' else first + '_' + second for first, second in grp.columns.values]
+    return grp
 
 def run_experiments(data, train_col, label_col, sample_size, n_splits = 2, stop_at=None, ml_batch_size=100, ml_epochs=3, random_states=[0], verbose=True):
     start_ex = timer()
     res_rand =[] 
     res_sbert = []
     res_bt = []
+
+    bt = bertopic_clustering(sample_size, X = data[train_col].to_list())
+    sk = sbert_kmeans(sample_size=sample_size, X = data[train_col].to_list())
+    rd = random_sampling(sample_size=sample_size)
+
     for ri, r in enumerate(random_states):
         X_train_list, y_train_list, X_tests_list, y_tests_list = split_training_data(data[train_col], data[label_col], n_splits=n_splits, test_split_ratio=0.4, random_state=r) 
-        bt = bertopic_clustering(sample_size, X = data[train_col].to_list())
-        sk = sbert_kmeans(sample_size=sample_size, X = data[train_col].to_list())
-        rd = random_sampling(sample_size=sample_size)
+
         res_rand_f = []
         res_sbert_f = []
         res_bt_f = []
     
         for i, X_train in enumerate(X_train_list):
+
             X_test, y_test, X_val, y_val = split_training_data( X_tests_list[i], y_tests_list[i], n_splits=1, test_split_ratio=0.5, random_state=r) 
             try:
-                res_rand_f.append(apply_active_learning(algorithm=rd, source=X_train, source_y=y_train_list[i], ml_x_val=X_val, ml_y_val=y_val, ml_x_test=X_test, ml_y_test=y_test, random_state=r, stop_at=stop_at, sample_size=sample_size, ml_batch_size=ml_batch_size, ml_epochs=ml_epochs, title=f'RD-{i}-{ri}', verbose=verbose)) 
+                res_rand_f.append(apply_active_learning(algorithm=rd, source=X_train, source_y=y_train_list[i], ml_x_val=X_val, ml_y_val=y_val, ml_x_test=X_test, ml_y_test=y_test, random_state=r, stop_at=stop_at, sample_size=sample_size, ml_batch_size=ml_batch_size, ml_epochs=ml_epochs, title=f'RD-{ri}-{i}', verbose=verbose)) 
             except Exception as e:
                 print(ri, i, 'RD', e)
             try:
-                res_sbert_f.append(apply_active_learning(algorithm=sk, source=X_train, source_y=y_train_list[i], ml_x_val=X_val, ml_y_val=y_val, ml_x_test=X_test, ml_y_test=y_test, random_state=r, stop_at=stop_at, sample_size=sample_size, ml_batch_size=ml_batch_size, ml_epochs=ml_epochs, title=f'SK-{i}-{ri}', verbose=verbose))
+                res_sbert_f.append(apply_active_learning(algorithm=sk, source=X_train, source_y=y_train_list[i], ml_x_val=X_val, ml_y_val=y_val, ml_x_test=X_test, ml_y_test=y_test, random_state=r, stop_at=stop_at, sample_size=sample_size, ml_batch_size=ml_batch_size, ml_epochs=ml_epochs, title=f'SK-{ri}-{i}', verbose=verbose))
             except Exception as e:
                 print(ri, i, 'SK', e)
             try:
-                res_bt_f.append(apply_active_learning(algorithm=bt, source=X_train, source_y=y_train_list[i], ml_x_val=X_val, ml_y_val=y_val, ml_x_test=X_test, ml_y_test=y_test, random_state=r, stop_at=stop_at, sample_size=sample_size, ml_batch_size=ml_batch_size, ml_epochs=ml_epochs, title=f'BT-{i}-{ri}', verbose=verbose))
+                res_bt_f.append(apply_active_learning(algorithm=bt, source=X_train, source_y=y_train_list[i], ml_x_val=X_val, ml_y_val=y_val, ml_x_test=X_test, ml_y_test=y_test, random_state=r, stop_at=stop_at, sample_size=sample_size, ml_batch_size=ml_batch_size, ml_epochs=ml_epochs, title=f'BT-{ri}-{i}', verbose=verbose))
             except Exception as e:
                 print(ri, i, 'BT', e)
+             # clear models
+    
         res_rand.append(res_rand_f)
         res_sbert.append(res_sbert_f)
         res_bt.append(res_bt_f)
+ 
     # print_plot(res_rand, res_sbert, res_bt, title=f'Sample Size {sample_size}')
     duration = timedelta(seconds=timer()-start_ex)
+    print('Duration:', duration)
     return {
             'res_rand': res_rand, 
             'res_sbert': res_sbert, 
@@ -373,12 +412,14 @@ def run_experiments(data, train_col, label_col, sample_size, n_splits = 2, stop_
             'duration' : duration
         }
 
+
 if __name__ == "__main__":
 
     # SET Determinism
         # set determinism
     from os import environ
     environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+    environ["CUDA_LAUNCH_BLOCKING"] = "1"
     import torch
     torch.use_deterministic_algorithms(True)
     torch.backends.cudnn.benchmark = False
@@ -398,5 +439,5 @@ if __name__ == "__main__":
     # END disable logging
 
     data = get_cysec_dataset('data/dataset_1.json', random_state=1337)
-    ex = run_experiments(data, train_col='display_text', label_col='label_train', sample_size=50, ml_batch_size=25, ml_epochs=3, stop_at=100, random_states=[0, 42])
+    ex = run_experiments(data, train_col='display_text', label_col='label_train', sample_size=100, ml_batch_size=50, ml_epochs=3, stop_at=100, random_states=[0, 42])
     print(ex)
