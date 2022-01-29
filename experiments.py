@@ -9,6 +9,10 @@ from datetime import timedelta
 
 def get_cysec_dataset(dataset_path:str, random_state=0, delete_balance_rate=None):
     data = pd.read_json(dataset_path)
+
+    # fix single label with class 5
+    data["label"] = data["label"].apply(lambda x: 4 if x > 4 else x)
+
     if delete_balance_rate is not None:
         todelete = math.ceil(len(data[data['label']==1]) * delete_balance_rate)
         print(todelete)
@@ -231,11 +235,11 @@ class sbert_kmeans:
 
         # cache results
         from sentence_transformers import SentenceTransformer
-        model = SentenceTransformer(bert_model_name)
-        model.max_seq_length = np.argmax(X)
-        encoded_sentences = model.encode(X, show_progress_bar=False)
-        self._encoded_sentences_dict = {X[i]:encoded_sentences[i] for i in range(len(encoded_sentences))}
-        del model
+        self.model = SentenceTransformer(bert_model_name)
+        self.model.max_seq_length = np.argmax(X)
+        # encoded_sentences = model.encode(X, show_progress_bar=False)
+        # self._encoded_sentences_dict = {X[i]:encoded_sentences[i] for i in range(len(encoded_sentences))}
+        # del model
         torch.cuda.empty_cache()
     def __del__(self):
         del self._encoded_sentences_dict
@@ -249,18 +253,19 @@ class sbert_kmeans:
         
         # encode embeddings
         embedding_list = []
-        try:
-            if self._encoded_sentences_dict is not None:
-                embedding_list = [self._encoded_sentences_dict[s] for s in input]
-        except:
+        # try:
+        #     if self._encoded_sentences_dict is not None:
+        #         embedding_list = [self._encoded_sentences_dict[s] for s in input]
+        # except:
             # if list cannot be encoded with precalculated list - load new SentenceTransformer
-            from sentence_transformers import SentenceTransformer
-            import torch
-            model = SentenceTransformer(self.__bert_model_name)
-            model.max_seq_length = np.argmax(input)
-            embedding_list = model.encode(input, show_progress_bar=verbose)
-            del model
-            torch.cuda.empty_cache()
+        # from sentence_transformers import SentenceTransformer
+        # import torch
+        # model = SentenceTransformer(self.__bert_model_name)
+        # model.max_seq_length = np.argmax(input)
+        embedding_list = self.model.encode(input, show_progress_bar=False)
+        # del model
+        torch.cuda.empty_cache()
+
         from sklearn.cluster import KMeans
         
         clustering_model = KMeans(n_clusters=self.__sample_size, random_state=random_state) 
@@ -406,9 +411,9 @@ def run_experiments(data, train_col, label_col, sample_size, n_splits = 2, stop_
     duration = timedelta(seconds=timer()-start_ex)
     print('Duration:', duration)
     return {
-            'res_rand': res_rand, 
-            'res_sbert': res_sbert, 
-            'res_bt': res_bt, 
+            'Random-Sampling': res_rand, 
+            'SBERT-KMeans': res_sbert, 
+            'BERTopic-Clustering': res_bt, 
             'duration' : duration
         }
 
@@ -439,5 +444,6 @@ if __name__ == "__main__":
     # END disable logging
 
     data = get_cysec_dataset('data/dataset_1.json', random_state=1337)
-    ex = run_experiments(data, train_col='display_text', label_col='label_train', sample_size=100, ml_batch_size=50, ml_epochs=3, stop_at=100, random_states=[0, 42])
+    ex = run_experiments(data, train_col='display_text', label_col='label_train', n_splits=5, sample_size=100, ml_batch_size=50, ml_epochs=15, random_states=[0, 42, 1337, 489, 555])
+    pd.DataFrame(ex).to_json('results/full_runtimes_optimized.json')
     print(ex)
