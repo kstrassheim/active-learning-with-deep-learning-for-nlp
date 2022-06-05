@@ -11,4 +11,4 @@ Active-Learning, Deep-Learning, Sentence-BERT, BERTopic, NLP
 Python-3, Jupyter-Notebooks, Pandas, PyTorch, HuggingFace-Lib
 
 ## Manual (Short)
-Both Active-Learning algorithms and the experimental runs are defined in experiments.py. The runtime of the experiments is about 6 days with an Geforce RTX 3090. Afterward the experiments have to be converted to fit into the evaluation format using convert-result.py. The final results can be regarded in result-analysis.ipynb
+Both Active-Learning algorithms and the experimental runs are defined in experiments.py. The runtime of the experiments is about 6 days using Geforce RTX 3090. Afterward the experiments have to be converted to fit into the evaluation format using convert-result.py. The final results can be regarded in result-analysis.ipynb
